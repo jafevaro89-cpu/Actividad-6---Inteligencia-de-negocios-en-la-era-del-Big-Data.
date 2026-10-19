@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Panel de análisis de datos</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;800&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>tailwind.config={darkMode:'class'}</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+body{font-family:Manrope,system-ui,sans-serif;background:#f3f5f8;color:#0f172a}
+.dark body{background:#0a1120;color:#e2e8f0}
+.card{background:#fff;border:1px solid #e5e9f0;border-radius:1.25rem;box-shadow:0 1px 2px rgba(15,23,42,.04),0 8px 24px -12px rgba(15,23,42,.10)}
+.dark .card{background:#101a2f;border-color:#1c2a47;box-shadow:0 8px 24px -12px rgba(0,0,0,.5)}
+.muted{color:#64748b}.dark .muted{color:#8fa0bb}
+.inp{background:#f3f5f8;border:1px solid #e5e9f0;border-radius:.75rem;padding:.4rem .6rem;font-size:.8rem}
+.dark .inp{background:#0a1120;border-color:#1c2a47;color:#e2e8f0}
+.btn{background:#0f766e;color:#fff;border-radius:.75rem;padding:.55rem 1rem;font-weight:600;font-size:.85rem;cursor:pointer}
+.btn:hover{background:#115e59}
+.drop.over{border-color:#0f766e;background:rgba(15,118,110,.08)}
+:focus-visible{outline:2px solid #14b8a6;outline-offset:2px}
+th{position:sticky;top:0;background:#f3f5f8}.dark th{background:#0a1120}
+</style>
+</head>
+<body class="min-h-screen">
+<header class="sticky top-0 z-20 backdrop-blur bg-white/70 dark:bg-[#0a1120]/70 border-b border-slate-200 dark:border-slate-800">
+  <div class="max-w-[1500px] mx-auto px-4 py-3 flex items-center gap-3">
+    <div class="w-9 h-9 rounded-xl bg-teal-700 text-white grid place-items-center font-extrabold">∑</div>
+    <div class="min-w-0">
+      <h1 class="font-extrabold leading-tight">Panel de datos</h1>
+      <p id="fname" class="text-xs muted truncate">Ningún archivo cargado</p>
+    </div>
+    <div class="ml-auto flex items-center gap-2">
+      <label class="btn" for="file">Cargar archivo</label>
+      <input id="file" type="file" accept=".xlsx,.xls,.csv" class="sr-only">
+      <button id="theme" class="inp !py-2" aria-label="Cambiar tema">🌓</button>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-[1500px] mx-auto px-4 py-6">
+  <section id="empty" class="drop card border-2 border-dashed p-10 sm:p-16 text-center">
+    <h2 class="text-2xl font-extrabold">Suelta aquí tu Excel o CSV</h2>
+    <p class="muted mt-2 max-w-md mx-auto">Acepta .xlsx, .xls y .csv. El panel detecta las columnas, calcula los indicadores y arma los gráficos automáticamente.</p>
+    <label for="file" class="btn inline-block mt-6">Elegir archivo</label>
+    <p id="err" class="text-red-500 text-sm mt-4"></p>
+  </section>
+
+  <div id="app" class="hidden grid lg:grid-cols-[17rem_1fr] gap-5">
+    <aside class="lg:sticky lg:top-20 lg:self-start lg:max-h-[calc(100vh-6rem)] lg:overflow-auto card p-4">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="font-bold">Filtros</h2>
+        <button id="clear" class="text-xs text-teal-600 dark:text-teal-400 font-semibold">Limpiar</button>
+      </div>
+      <div id="filters" class="space-y-1"></div>
+    </aside>
+
+    <div class="min-w-0 space-y-5">
+      <div id="chips" class="flex flex-wrap gap-2"></div>
+      <div id="kpis" class="grid grid-cols-2 xl:grid-cols-5 gap-4"></div>
+
+      <div class="card p-5">
+        <div class="flex flex-wrap items-end gap-3 mb-3">
+          <div><h3 class="font-bold">Cruce de variables</h3><p class="text-xs muted">Compara dos preguntas entre sí</p></div>
+          <div class="ml-auto flex flex-wrap gap-2 items-center text-xs">
+            <select id="xsel" class="inp max-w-[14rem]"></select>
+            <span class="muted">por</span>
+            <select id="ysel" class="inp max-w-[14rem]"></select>
+            <label class="flex items-center gap-1"><input id="pct" type="checkbox" checked> 100 %</label>
+          </div>
+        </div>
+        <div class="h-80"><canvas id="cross"></canvas></div>
+      </div>
+
+      <div id="grid" class="grid md:grid-cols-2 2xl:grid-cols-3 gap-5"></div>
+
+      <div class="card p-5">
+        <h3 class="font-bold mb-3">Vista de registros <span class="text-xs muted font-normal" id="tcount"></span></h3>
+        <div class="overflow-auto max-h-96 rounded-xl border border-slate-200 dark:border-slate-800">
+          <table class="text-xs w-full" id="tbl"></table>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+const $=s=>document.querySelector(s);
+const PAL=['#0f9d94','#6366f1','#f59e0b','#ec4899','#22c55e','#3b82f6','#f97316','#8b5cf6','#06b6d4','#eab308','#ef4444','#64748b'];
+let ROWS=[],COLS=[],F={},CH=[],CROSS=null;
+
+/* ---------- utilidades ---------- */
+const fix=v=>{
+  if(typeof v!=='string')return v;
+  v=v.replace(/\s+/g,' ').trim();
+  if(/[ÃÂ]/.test(v)){try{v=decodeURIComponent(escape(v))}catch(e){}}  // repara texto con codificación doble
+  return v;
+};
+const lab=n=>{let s=n.replace(/[¿?:]/g,'').replace(/\s+/g,' ').trim();return s.length>70?s.slice(0,67)+'…':s};
+const val=v=>v==null?'Sin dato':(v instanceof Date?v.toISOString().slice(0,10):String(v));
+const fmt=n=>n.toLocaleString('es-CO',{maximumFractionDigits:1});
+const dark=()=>document.documentElement.classList.contains('dark');
+function count(col,rows){const m=new Map();rows.forEach(r=>{const k=val(r[col]);m.set(k,(m.get(k)||0)+1)});return [...m].sort((a,b)=>b[1]-a[1])}
+
+/* ---------- carga ---------- */
+function load(file){
+  const rd=new FileReader(),csv=/\.csv$/i.test(file.name);
+  rd.onload=e=>{
+    try{
+      const wb=XLSX.read(e.target.result,{type:csv?'string':'array',cellDates:true});
+      let rows=[];
+      for(const n of wb.SheetNames){const j=XLSX.utils.sheet_to_json(wb.Sheets[n],{defval:null});if(j.length){rows=j;break}}
+      if(!rows.length)throw new Error('El archivo no tiene filas con datos.');
+      build(rows,file.name);
+    }catch(err){$('#err').textContent='No se pudo leer el archivo: '+err.message}
+  };
+  csv?rd.readAsText(file,'UTF-8'):rd.readAsArrayBuffer(file);
+}
+
+function build(rows,name){
+  const keys=[...new Set(rows.flatMap(r=>Object.keys(r)))],nm={},used=new Set();
+  keys.forEach(k=>{let n=fix(String(k))||'Columna',b=n,i=2;while(used.has(n))n=b+' ('+i++ +')';used.add(n);nm[k]=n});
+  ROWS=rows.map(r=>{const o={};keys.forEach(k=>{let v=r[k];o[nm[k]]=(v==null||v==='')?null:fix(v)});return o});
+  COLS=Object.values(nm).map(n=>{
+    const vs=ROWS.map(r=>r[n]).filter(v=>v!=null),u=new Set(vs.map(String)).size,L=vs.length||1;
+    const d=vs.filter(v=>v instanceof Date).length,nu=vs.filter(v=>typeof v==='number').length;
+    let t='text';
+    if(d/L>.9)t='date';
+    else if(nu/L>.9)t=u>12?'num':'cat';
+    else if(u<=30&&u<ROWS.length*.5)t='cat';
+    return {n,label:lab(n),type:t,u};
+  }).filter(c=>c.u>0);
+  F={};
+  $('#fname').textContent=name+' · '+ROWS.length.toLocaleString('es-CO')+' filas · '+COLS.length+' columnas';
+  $('#empty').classList.add('hidden');$('#app').classList.remove('hidden');
+  buildFilters();buildSelectors();render();
+}
+
+/* ---------- filtros ---------- */
+const cats=()=>COLS.filter(c=>c.type==='cat');
+function buildFilters(){
+  const box=$('#filters');box.innerHTML='';
+  cats().forEach(c=>{
+    const d=document.createElement('details');
+    d.className='rounded-xl px-2 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800/60';
+    d.innerHTML='<summary class="cursor-pointer text-sm font-semibold" title="'+c.n.replace(/"/g,'&quot;')+'">'+c.label+'</summary><div class="mt-2 space-y-1 max-h-52 overflow-auto"></div>';
+    const w=d.lastChild;
+    count(c.n,ROWS).forEach(([k,n])=>{
+      const l=document.createElement('label');l.className='flex items-center gap-2 text-xs cursor-pointer';
+      const i=document.createElement('input');i.type='checkbox';i.dataset.c=c.n;i.dataset.v=k;
+      i.onchange=()=>toggle(c.n,k);
+      const s=document.createElement('span');s.className='flex-1';s.textContent=k;
+      const m=document.createElement('span');m.className='muted';m.textContent=n.toLocaleString('es-CO');
+      l.append(i,s,m);w.append(l);
+    });
+    box.append(d);
+  });
+}
+function toggle(c,v,only){
+  const s=F[c]||(F[c]=new Set());
+  if(only){s.clear();s.add(v)}else s.has(v)?s.delete(v):s.add(v);
+  if(!s.size)delete F[c];
+  render();
+}
+function syncFilters(){
+  document.querySelectorAll('#filters input').forEach(i=>i.checked=!!(F[i.dataset.c]&&F[i.dataset.c].has(i.dataset.v)));
+  const ch=$('#chips');ch.innerHTML='';
+  Object.entries(F).forEach(([c,s])=>s.forEach(v=>{
+    const b=document.createElement('button');
+    b.className='text-xs font-semibold rounded-full px-3 py-1 bg-teal-600/10 text-teal-700 dark:text-teal-300 border border-teal-600/30';
+    b.textContent=lab(c).slice(0,28)+': '+v+'  ✕';b.onclick=()=>toggle(c,v);ch.append(b);
+  }));
+}
+$('#clear').onclick=()=>{F={};render()};
+
+/* ---------- render ---------- */
+const filtered=()=>ROWS.filter(r=>Object.entries(F).every(([c,s])=>s.has(val(r[c]))));
+function render(){
+  const R=filtered();syncFilters();
+  Chart.defaults.color=dark()?'#94a3b8':'#475569';
+  Chart.defaults.borderColor=dark()?'#1c2a47':'#e5e9f0';
+  Chart.defaults.font.family='Manrope,system-ui,sans-serif';
+  kpis(R);cross();autoCharts(R);table(R);
+}
+
+function kpis(R){
+  const tot=ROWS.length,cells=R.length*COLS.length||1;
+  const filled=R.reduce((a,r)=>a+COLS.reduce((x,c)=>x+(r[c.n]!=null?1:0),0),0);
+  const K=[['Registros',R.length.toLocaleString('es-CO'),(tot?Math.round(R.length/tot*100):0)+'% del total'],
+           ['Completitud',Math.round(filled/cells*100)+'%','celdas con dato']];
+  const num=COLS.find(c=>c.type==='num');
+  if(num){const v=R.map(r=>r[num.n]).filter(x=>typeof x==='number');K.push(['Promedio · '+num.label.slice(0,22),v.length?fmt(v.reduce((a,b)=>a+b,0)/v.length):'—','suma '+fmt(v.reduce((a,b)=>a+b,0))])}
+  const dt=COLS.find(c=>c.type==='date');
+  if(dt){const v=R.map(r=>r[dt.n]).filter(x=>x instanceof Date).sort((a,b)=>a-b);K.push(['Periodo',v.length?v[0].toISOString().slice(0,7):'—',v.length?'a '+v[v.length-1].toISOString().slice(0,7):''])}
+  cats().filter(c=>c.u>=2&&c.u<=8).forEach(c=>{
+    if(K.length>=5)return;
+    const t=count(c.n,R)[0];
+    K.push([c.label.slice(0,26),R.length?Math.round(t[1]/R.length*100)+'%':'—',t?t[0]:'']);
+  });
+  $('#kpis').innerHTML=K.map(k=>'<div class="card p-4 min-w-0"><p class="text-xs muted font-semibold truncate">'+k[0]+'</p><p class="text-3xl font-extrabold mt-1">'+k[1]+'</p><p class="text-xs muted mt-1 truncate" title="'+k[2]+'">'+k[2]+'</p></div>').join('');
+}
+
+function buildSelectors(){
+  const o=cats().map(c=>'<option value="'+c.n.replace(/"/g,'&quot;')+'">'+c.label+'</option>').join('');
+  $('#xsel').innerHTML=o;$('#ysel').innerHTML=o;
+  const c=cats();$('#xsel').selectedIndex=Math.min(2,c.length-1);$('#ysel').selectedIndex=Math.min(5,c.length-1);
+}
+function cross(){
+  if(CROSS)CROSS.destroy();
+  const x=$('#xsel').value,y=$('#ysel').value,R=filtered();if(!x)return;
+  const xs=count(x,R).slice(0,10).map(a=>a[0]),ys=count(y,R).slice(0,8).map(a=>a[0]),pct=$('#pct').checked;
+  const m={};ys.forEach(s=>m[s]={});
+  R.forEach(r=>{const a=val(r[x]),b=val(r[y]);if(xs.includes(a)&&m[b])m[b][a]=(m[b][a]||0)+1});
+  const tot={};xs.forEach(a=>tot[a]=ys.reduce((s,b)=>s+(m[b][a]||0),0)||1);
+  CROSS=new Chart($('#cross'),{type:'bar',
+    data:{labels:xs.map(s=>s.length>26?s.slice(0,24)+'…':s),datasets:ys.map((b,i)=>({label:b,backgroundColor:PAL[i],borderRadius:4,
+      data:xs.map(a=>pct?+((m[b][a]||0)/tot[a]*100).toFixed(1):(m[b][a]||0))}))},
+    options:{maintainAspectRatio:false,scales:{x:{stacked:true,grid:{display:false}},y:{stacked:true,max:pct?100:undefined,ticks:{callback:v=>pct?v+'%':v}}},
+      plugins:{legend:{position:'bottom',labels:{boxWidth:10,usePointStyle:true}}}}});
+}
+$('#xsel').onchange=$('#ysel').onchange=$('#pct').onchange=cross;
+
+function card(title,sub){
+  const d=document.createElement('div');d.className='card p-5 min-w-0';
+  d.innerHTML='<h3 class="font-bold text-sm leading-snug" title="'+title.replace(/"/g,'&quot;')+'">'+lab(title)+'</h3><p class="text-xs muted mb-3">'+sub+'</p><div class="h-64"><canvas></canvas></div>';
+  $('#grid').append(d);return d.querySelector('canvas');
+}
+function autoCharts(R){
+  CH.forEach(c=>c.destroy());CH=[];$('#grid').innerHTML='';
+  const dt=COLS.find(c=>c.type==='date');
+  if(dt){
+    const m={};R.forEach(r=>{if(r[dt.n] instanceof Date){const k=r[dt.n].toISOString().slice(0,7);m[k]=(m[k]||0)+1}});
+    const ks=Object.keys(m).sort();
+    CH.push(new Chart(card(dt.n,'Registros por mes'),{type:'line',data:{labels:ks,datasets:[{data:ks.map(k=>m[k]),borderColor:PAL[0],backgroundColor:'rgba(15,157,148,.15)',fill:true,tension:.3,pointRadius:2}]},options:{maintainAspectRatio:false,plugins:{legend:{display:false}}}}));
+  }
+  const num=COLS.find(c=>c.type==='num');
+  if(num){
+    const v=R.map(r=>r[num.n]).filter(x=>typeof x==='number');
+    if(v.length){const mn=Math.min(...v),mx=Math.max(...v),w=(mx-mn)/10||1,b=Array(10).fill(0);
+      v.forEach(x=>b[Math.min(9,Math.floor((x-mn)/w))]++);
+      CH.push(new Chart(card(num.n,'Distribución'),{type:'bar',data:{labels:b.map((_,i)=>fmt(mn+i*w)),datasets:[{data:b,backgroundColor:PAL[1],borderRadius:4}]},options:{maintainAspectRatio:false,plugins:{legend:{display:false}}}}))}
+  }
+  cats().slice(0,14).forEach(c=>{
+    const all=count(c.n,R),top=all.slice(0,12),rest=all.slice(12).reduce((a,b)=>a+b[1],0);
+    if(rest)top.push(['Otros',rest]);
+    const donut=c.u<=5,total=R.length||1;
+    const cv=card(c.n,c.u+' opciones · clic para filtrar');
+    CH.push(new Chart(cv,{type:donut?'doughnut':'bar',
+      data:{labels:top.map(t=>t[0]),datasets:[{data:top.map(t=>t[1]),backgroundColor:donut?PAL:PAL[CH.length%PAL.length],borderRadius:donut?0:5,borderWidth:donut?2:0,borderColor:dark()?'#101a2f':'#fff'}]},
+      options:{maintainAspectRatio:false,indexAxis:donut?'x':'y',cutout:donut?'62%':undefined,
+        onClick:(e,els,ch)=>{if(els.length){const k=ch.data.labels[els[0].index];if(k!=='Otros')toggle(c.n,k,true)}},
+        onHover:(e,els)=>{e.native.target.style.cursor=els.length?'pointer':'default'},
+        scales:donut?{}:{x:{grid:{display:false}},y:{grid:{display:false},ticks:{callback(v){const s=this.getLabelForValue(v);return s.length>30?s.slice(0,28)+'…':s}}}},
+        plugins:{legend:{display:donut,position:'bottom',labels:{boxWidth:10,usePointStyle:true}},
+          tooltip:{callbacks:{label:t=>{const v=donut?t.parsed:t.parsed.x;return ' '+v.toLocaleString('es-CO')+' ('+Math.round(v/total*100)+'%)'}}}}}}));
+  });
+}
+function table(R){
+  const cs=COLS.slice(0,20);
+  $('#tcount').textContent='· primeras '+Math.min(100,R.length)+' de '+R.length.toLocaleString('es-CO');
+  $('#tbl').innerHTML='<thead><tr>'+cs.map(c=>'<th class="text-left font-semibold p-2 whitespace-nowrap" title="'+c.n.replace(/"/g,'&quot;')+'">'+c.label.slice(0,30)+'</th>').join('')+'</tr></thead><tbody>'+
+    R.slice(0,100).map(r=>'<tr class="border-t border-slate-200 dark:border-slate-800">'+cs.map(c=>'<td class="p-2 whitespace-nowrap">'+val(r[c.n]).replace(/</g,'&lt;')+'</td>').join('')+'</tr>').join('')+'</tbody>';
+}
+
+/* ---------- eventos ---------- */
+$('#file').onchange=e=>{if(e.target.files[0])load(e.target.files[0]);e.target.value=''};
+['dragover','dragenter'].forEach(t=>document.addEventListener(t,e=>{e.preventDefault();$('#empty').classList.add('over')}));
+['dragleave','drop'].forEach(t=>document.addEventListener(t,e=>{e.preventDefault();$('#empty').classList.remove('over')}));
+document.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)load(f)});
+$('#theme').onclick=()=>{document.documentElement.classList.toggle('dark');if(ROWS.length)render()};
+if(matchMedia('(prefers-color-scheme: dark)').matches)document.documentElement.classList.add('dark');
+</script>
+</body>
+</html>
